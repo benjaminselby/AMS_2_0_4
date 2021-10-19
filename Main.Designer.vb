@@ -1,9 +1,9 @@
-﻿<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()> _
+<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()>
 Partial Class Main
     Inherits System.Windows.Forms.Form
 
     'Form overrides dispose to clean up the component list.
-    <System.Diagnostics.DebuggerNonUserCode()> _
+    <System.Diagnostics.DebuggerNonUserCode()>
     Protected Overrides Sub Dispose(ByVal disposing As Boolean)
         Try
             If disposing AndAlso components IsNot Nothing Then
@@ -29,7 +29,7 @@ Partial Class Main
         Me.PictureBox1 = New System.Windows.Forms.PictureBox()
         Me.SaveFileDialog1 = New System.Windows.Forms.SaveFileDialog()
         Me.UserActivityTmr = New System.Windows.Forms.Timer(Me.components)
-        Me.AxAcroPDF1 = New AxAcroPDFLib.AxAcroPDF()
+        Me.PdfViewer = New AxAcroPDFLib.AxAcroPDF()
         Me.StudentReportsCbx = New System.Windows.Forms.ComboBox()
         Me.SelectViewGbx = New System.Windows.Forms.GroupBox()
         Me.StudentServicesRbtn = New System.Windows.Forms.RadioButton()
@@ -42,10 +42,9 @@ Partial Class Main
         Me.NoClassSelectedLbl = New System.Windows.Forms.Label()
         Me.SearchTipsLbl = New System.Windows.Forms.Label()
         Me.NoStudentSelectedLbl = New System.Windows.Forms.Label()
-        Me.ReportViewerLoadingLbl = New System.Windows.Forms.Label()
-        Me.RenderingTmr = New System.Windows.Forms.Timer(Me.components)
+        Me.ViewLoadingLbl = New System.Windows.Forms.Label()
         CType(Me.PictureBox1, System.ComponentModel.ISupportInitialize).BeginInit()
-        CType(Me.AxAcroPDF1, System.ComponentModel.ISupportInitialize).BeginInit()
+        CType(Me.PdfViewer, System.ComponentModel.ISupportInitialize).BeginInit()
         Me.SelectViewGbx.SuspendLayout()
         Me.SuspendLayout()
         '
@@ -66,7 +65,7 @@ Partial Class Main
         Me.ReportViewer.PromptAreaCollapsed = True
         Me.ReportViewer.ServerReport.ReportServerUrl = New System.Uri("http://testserver2.woodcroft.sa.edu.au/Reportserver", System.UriKind.Absolute)
         Me.ReportViewer.ShowToolBar = False
-        Me.ReportViewer.Size = New System.Drawing.Size(4312, 2510)
+        Me.ReportViewer.Size = New System.Drawing.Size(4447, 2443)
         Me.ReportViewer.TabIndex = 6
         Me.ReportViewer.Visible = False
         '
@@ -98,15 +97,15 @@ Partial Class Main
         Me.UserActivityTmr.Enabled = True
         Me.UserActivityTmr.Interval = 60000
         '
-        'AxAcroPDF1
+        'PdfViewer
         '
-        Me.AxAcroPDF1.Enabled = True
-        Me.AxAcroPDF1.Location = New System.Drawing.Point(270, 37)
-        Me.AxAcroPDF1.Name = "AxAcroPDF1"
-        Me.AxAcroPDF1.OcxState = CType(resources.GetObject("AxAcroPDF1.OcxState"), System.Windows.Forms.AxHost.State)
-        Me.AxAcroPDF1.Size = New System.Drawing.Size(1387, 918)
-        Me.AxAcroPDF1.TabIndex = 14
-        Me.AxAcroPDF1.Visible = False
+        Me.PdfViewer.Enabled = True
+        Me.PdfViewer.Location = New System.Drawing.Point(270, 37)
+        Me.PdfViewer.Name = "PdfViewer"
+        Me.PdfViewer.OcxState = CType(resources.GetObject("PdfViewer.OcxState"), System.Windows.Forms.AxHost.State)
+        Me.PdfViewer.Size = New System.Drawing.Size(1387, 918)
+        Me.PdfViewer.TabIndex = 14
+        Me.PdfViewer.Visible = False
         '
         'StudentReportsCbx
         '
@@ -250,22 +249,17 @@ Partial Class Main
         Me.NoStudentSelectedLbl.Text = "No student selected."
         Me.NoStudentSelectedLbl.Visible = False
         '
-        'ReportViewerLoadingLbl
+        'ViewLoadingLbl
         '
-        Me.ReportViewerLoadingLbl.AutoSize = True
-        Me.ReportViewerLoadingLbl.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle
-        Me.ReportViewerLoadingLbl.Font = New System.Drawing.Font("Gill Sans MT", 12.0!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
-        Me.ReportViewerLoadingLbl.ForeColor = System.Drawing.Color.FromArgb(CType(CType(33, Byte), Integer), CType(CType(62, Byte), Integer), CType(CType(102, Byte), Integer))
-        Me.ReportViewerLoadingLbl.Location = New System.Drawing.Point(405, 255)
-        Me.ReportViewerLoadingLbl.Name = "ReportViewerLoadingLbl"
-        Me.ReportViewerLoadingLbl.Size = New System.Drawing.Size(178, 25)
-        Me.ReportViewerLoadingLbl.TabIndex = 23
-        Me.ReportViewerLoadingLbl.Text = "Loading. Please wait..."
-        Me.ReportViewerLoadingLbl.Visible = False
-        '
-        'RenderingTmr
-        '
-        Me.RenderingTmr.Interval = 500
+        Me.ViewLoadingLbl.AutoSize = True
+        Me.ViewLoadingLbl.Font = New System.Drawing.Font("Gill Sans MT", 12.0!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.ViewLoadingLbl.ForeColor = System.Drawing.Color.FromArgb(CType(CType(131, Byte), Integer), CType(CType(150, Byte), Integer), CType(CType(175, Byte), Integer))
+        Me.ViewLoadingLbl.Location = New System.Drawing.Point(284, 74)
+        Me.ViewLoadingLbl.Name = "ViewLoadingLbl"
+        Me.ViewLoadingLbl.Size = New System.Drawing.Size(176, 23)
+        Me.ViewLoadingLbl.TabIndex = 23
+        Me.ViewLoadingLbl.Text = "Loading. Please wait..."
+        Me.ViewLoadingLbl.Visible = False
         '
         'Main
         '
@@ -275,14 +269,14 @@ Partial Class Main
         Me.AutoScroll = True
         Me.BackColor = System.Drawing.Color.AliceBlue
         Me.ClientSize = New System.Drawing.Size(1630, 966)
-        Me.Controls.Add(Me.ReportViewerLoadingLbl)
+        Me.Controls.Add(Me.ViewLoadingLbl)
         Me.Controls.Add(Me.NoStudentSelectedLbl)
         Me.Controls.Add(Me.SearchTipsLbl)
         Me.Controls.Add(Me.NoClassSelectedLbl)
         Me.Controls.Add(Me.NoStudentServicesReportLbl)
         Me.Controls.Add(Me.Label1)
         Me.Controls.Add(Me.ClassFilterLbl)
-        Me.Controls.Add(Me.AxAcroPDF1)
+        Me.Controls.Add(Me.PdfViewer)
         Me.Controls.Add(Me.StudentReportsCbx)
         Me.Controls.Add(Me.ExportPdfButton)
         Me.Controls.Add(Me.PictureBox1)
@@ -295,7 +289,7 @@ Partial Class Main
         Me.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen
         Me.Text = "Academic Monitoring System"
         CType(Me.PictureBox1, System.ComponentModel.ISupportInitialize).EndInit()
-        CType(Me.AxAcroPDF1, System.ComponentModel.ISupportInitialize).EndInit()
+        CType(Me.PdfViewer, System.ComponentModel.ISupportInitialize).EndInit()
         Me.SelectViewGbx.ResumeLayout(False)
         Me.SelectViewGbx.PerformLayout()
         Me.ResumeLayout(False)
@@ -311,7 +305,7 @@ Partial Class Main
     Friend WithEvents chkbtnStudent As System.Windows.Forms.CheckBox
     Friend WithEvents UserActivityTmr As System.Windows.Forms.Timer
     Private WithEvents ReportViewer As Microsoft.Reporting.WinForms.ReportViewer
-    Friend WithEvents AxAcroPDF1 As AxAcroPDFLib.AxAcroPDF
+    Friend WithEvents PdfViewer As AxAcroPDFLib.AxAcroPDF
     Friend WithEvents StudentReportsCbx As ComboBox
     Friend WithEvents SelectViewGbx As GroupBox
     Friend WithEvents StudentServicesRbtn As RadioButton
@@ -324,6 +318,5 @@ Partial Class Main
     Friend WithEvents NoClassSelectedLbl As Label
     Friend WithEvents SearchTipsLbl As Label
     Friend WithEvents NoStudentSelectedLbl As Label
-    Friend WithEvents ReportViewerLoadingLbl As Label
-    Friend WithEvents RenderingTmr As Timer
+    Friend WithEvents ViewLoadingLbl As Label
 End Class
