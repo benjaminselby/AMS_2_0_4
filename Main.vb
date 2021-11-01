@@ -8,13 +8,16 @@ Imports System.Configuration
 
 Public Class Main
 
-    Private versionNumber As String = "2.0.4"
+    Private versionNumber As String = "2.0.5"
 
     Private currentSemester As Integer
     Private currentYear As Integer
     Private currentUserId As Integer
     Private currentUserAmsLevel As String
     Private currentUserLearningArea As String
+
+    Private synergyDataHandler As DataHandler
+    Private activityLogger As ActivityLogger
 
     ' True if portrait/ false if landscape - used for pdf export algorithm.
     Private blnPortraitPDF As Boolean
@@ -32,8 +35,6 @@ Public Class Main
     Private Const intViewerBottomBorderWidth As Integer = 40
 
     Private Const userActivityTimeoutMsec As Integer = 900000 ' 15 min x 60 sec x 1000 msec
-    Private renderingTimeElapsedMsec As Integer
-    Private renderingMessageTimeoutMsec As Integer = 1000
 
 
     Public Sub New()
@@ -91,10 +92,53 @@ Public Class Main
         Me.Size = New Size(screenWidth, screenHeight)
         Me.Location = New Point(screenLeft, screenTop)
 
+
+        activityLogger = New ActivityLogger(ConfigurationManager.ConnectionStrings("Synergy").ConnectionString)
+
         ' Obtain user name by stripping 'WOODCROFT\' domain prefix from Windows ID. 
         currentUserName = Strings.Replace(
                 Security.Principal.WindowsIdentity.GetCurrent().Name,
                 ConfigurationManager.AppSettings("NetworkLoginPrefix"), "")
+
+        ' =================== INITIALISE DATA TABLES AND USER INFO ETC. ===============================
+
+        ' We buffer some of the database information locally to data tables during startup 
+        ' to improve responsiveness of the app. 
+
+        Try
+
+            synergyDataHandler = New DataHandler(ConfigurationManager.ConnectionStrings("Synergy").ConnectionString)
+
+            ' Confirm that a connection to Synergy is available. If not, alert user and quit. 
+            If synergyDataHandler.TestConnection() = False Then
+                MessageBox.Show(
+                    "Could not establish a connection to the Synergy database. " +
+                    "Please ensure that you have a valid internet connection. " +
+                    "If this problem persists, please contact Data Management.",
+                    "Could Not Connect to Synergy - Program Will Exit",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error)
+                End
+            End If
+
+            synergyDataHandler.LoadDataTable("UserInfo", "GetUserDetailsFromNetworkLoginProc",
+            New Dictionary(Of String, String) From {{"NetworkLogin", currentUserName}})
+
+            currentUserId = Integer.Parse(synergyDataHandler.allData.Tables("UserInfo").Rows(0).Item("id").ToString())
+
+            synergyDataHandler.LoadDataTable("UserClasses", "GetUserClassesProc",
+            New Dictionary(Of String, String) From {{"ID", currentUserId.ToString()}})
+
+            synergyDataHandler.LoadDataTable("AllClasses", "GetAllClassesProc")
+            synergyDataHandler.LoadDataTable("AllStudents", "GetAllStudentsProc")
+            synergyDataHandler.LoadDataTable("StudentClasses", "GetStudentClassesProc")
+
+        Catch ex As Exception
+            HandleError(ex)
+        End Try
+
+        ' =============================================================================================
+
 
         PopulateClassesMbx()
         PopulateStudentsMbx()
@@ -109,6 +153,8 @@ Public Class Main
         currentSemester = If(Date.Now.Month <= 6, 1, 2)
         inactivityMsec = 0
 
+        activityLogger.LogActivity(Me.Text, "Main.New", currentUserId, "Initialised")
+
     End Sub
 
 
@@ -120,9 +166,16 @@ Public Class Main
 
 
     Private Sub HandleError(Ex As Exception)
+
+        ' TODO: Maybe send email notification to me when error occurs? 
+
+        activityLogger.LogActivity(Me.Text, "HandleError", currentUserId, "FATAL ERROR: " _
+            + Ex.Message + "| STACK TRACE: " + Ex.StackTrace)
+
         MsgBox("Please contact Data Management for assistance" + vbCrLf + vbCrLf + Ex.Message,
                vbOKOnly + vbCritical, "An Error Occurred - Program Will Exit")
-        Me.Close()
+        End
+
     End Sub
 
 
@@ -134,10 +187,10 @@ Public Class Main
         ReportViewer.Width = Me.Width - ReportViewer.Left - intViewerRightBorderWidth
         ReportViewer.Height = Me.Height - ReportViewer.Top - intViewerBottomBorderWidth
 
-        AxAcroPDF1.Left = 270
-        AxAcroPDF1.Top = StudentReportsCbx.Top + StudentReportsCbx.Height + 5
-        AxAcroPDF1.Width = Me.Width - AxAcroPDF1.Left - intViewerRightBorderWidth
-        AxAcroPDF1.Height = Me.Height - AxAcroPDF1.Top - intViewerBottomBorderWidth
+        PdfViewer.Left = 270
+        PdfViewer.Top = StudentReportsCbx.Top + StudentReportsCbx.Height + 5
+        PdfViewer.Width = Me.Width - PdfViewer.Left - intViewerRightBorderWidth
+        PdfViewer.Height = Me.Height - PdfViewer.Top - intViewerBottomBorderWidth
 
     End Sub
 
@@ -148,145 +201,42 @@ Public Class Main
 
             ClassesMbx.Items.Add(AllStudentsLabel)
 
-            Using synergyConnection As New SqlConnection(
-                    ConfigurationManager.ConnectionStrings("Synergy").ConnectionString)
+            ' We add the classes that this user teaches first. Then we add any extra classes 
+            ' which the staff member has access to through AMS config afterwards. 
+            ' Lastly, we add all classes. 
 
-                synergyConnection.Open()
+            If synergyDataHandler.allData.Tables("UserClasses").Select("SortOrder = 1").Count > 0 Then
 
-                ' Get current user's Synergy ID 
-                ' This query should only return a single row. 
-                Using userInfoCmd As New SqlCommand(
-                        ConfigurationManager.AppSettings("GetUserDetailsFromNetworkLoginProc"), synergyConnection)
+                ClassesMbx.Items.Add(lineSeparator)
 
-                    userInfoCmd.Parameters.AddWithValue("NetworkLogin", currentUserName)
-                    userInfoCmd.CommandType = CommandType.StoredProcedure
+                For Each classRow As DataRow In synergyDataHandler.allData.Tables("UserClasses").Select("SortOrder = 1")
+                    ClassesMbx.Items.Add(New StudentClass(
+                        classRow.Item("ClassCode").ToString(),
+                        classRow.Item("Description").ToString()))
+                Next
 
-                    Using userInfoReader As SqlDataReader = userInfoCmd.ExecuteReader()
+            End If
 
-                        If userInfoReader.HasRows Then
-                            userInfoReader.Read()
-                            currentUserId = CInt(userInfoReader("ID").ToString)
-                        Else
-                            Throw New Exception(String.Format(
-                                "Could not find Synergy ID for current user " & vbCrLf &
-                                "with network login '{0}'" & vbCrLf & vbCrLf &
-                                "Please contact Data Management for assistance.",
-                                currentUserName.ToUpper()))
-                        End If
+            If synergyDataHandler.allData.Tables("UserClasses").Select("SortOrder > 1").Count > 0 Then
 
-                    End Using
-                End Using
+                ClassesMbx.Items.Add(lineSeparator)
 
-                '=======================================================================================
+                For Each classRow As DataRow In synergyDataHandler.allData.Tables("UserClasses").Select("SortOrder > 1")
+                    ClassesMbx.Items.Add(New StudentClass(
+                        classRow.Item("ClassCode").ToString(),
+                        classRow.Item("Description").ToString()))
+                Next
 
-                ' Ascertain whether current user has manager (M) level access. 
+            End If
 
-                ' This query should only return a single row. 
-                Using amsUsersCmd As New SqlCommand(
-                        ConfigurationManager.AppSettings("GetUserAccessProc"), synergyConnection)
+            ClassesMbx.Items.Add(lineSeparator)
 
-                    amsUsersCmd.CommandType = CommandType.StoredProcedure
-                    amsUsersCmd.Parameters.AddWithValue("ID", currentUserId.ToString)
+            For Each classRow As DataRow In synergyDataHandler.allData.Tables("AllClasses").Rows
+                ClassesMbx.Items.Add(New StudentClass(
+                        classRow.Item("ClassCode").ToString(),
+                        classRow.Item("Description").ToString()))
+            Next
 
-                    Using amsUsersRdr As SqlDataReader = amsUsersCmd.ExecuteReader()
-
-                        If amsUsersRdr.HasRows Then
-                            amsUsersRdr.Read()
-                            currentUserAmsLevel = amsUsersRdr("UserType").ToString
-                            currentUserLearningArea = amsUsersRdr("Learning Area").ToString
-                        End If
-
-                    End Using 'AmsUsersReader
-                End Using 'AmsUsersCmd
-
-                '=======================================================================================
-
-                ' Get current user's classes.
-                Using currentUserClassListCmd As New SqlCommand(
-                        ConfigurationManager.AppSettings("GetUserClassListProc"), synergyConnection)
-
-                    currentUserClassListCmd.CommandType = CommandType.StoredProcedure
-                    currentUserClassListCmd.Parameters.AddWithValue("ID", currentUserId)
-
-                    Using currentUserClassListRdr As SqlDataReader = currentUserClassListCmd.ExecuteReader()
-                        If currentUserClassListRdr.HasRows Then
-
-                            ClassesMbx.Items.Add(lineSeparator)
-
-                            Do While currentUserClassListRdr.Read()
-                                ClassesMbx.Items.Add(New StudentClass(
-                                    currentUserClassListRdr("ClassCode").ToString,
-                                    currentUserClassListRdr("Description").ToString))
-                            Loop
-                        End If
-                    End Using
-                End Using
-
-                '=======================================================================================
-
-                ' If current user has been assigned level = M (Manager) in the AMS Users table, 
-                ' add extra classes after a line break. 
-
-                If currentUserAmsLevel = "M" Then
-
-                    ClassesMbx.Items.Add(lineSeparator)
-
-                    Using extraClassesCmd As New SqlCommand()
-
-                        extraClassesCmd.CommandType = CommandType.StoredProcedure
-                        extraClassesCmd.Connection = synergyConnection
-
-                        If Regex.Match(currentUserLearningArea, "^\s*[0-9]+\s*(,{1}\s*[0-9]{1,2}\s*)*$").Success Then
-
-                            ' Learning Area consisting of one or more year levels 
-                            ' separated by commas. e.g. "6" Or "6,7,8"
-
-                            extraClassesCmd.CommandText = ConfigurationManager.AppSettings("GetClassesForYearLevelsProc")
-                            extraClassesCmd.Parameters.AddWithValue("YearLevelList", currentUserLearningArea)
-
-                        ElseIf Regex.Match(currentUserLearningArea, "^\s*[A-z]{2}\s*(,{1}\s*[A-z]{2}\s*)*$").Success Then
-
-                            ' Faculty heads and coordinators. Learning areas will be two-character codes
-                            ' Multiple codes may be separated by commas.
-                            ' eg. "SC" (Science) and "MA" (Mathematics) and "EN" (English) ==> "SC,MA,EN" etc. 
-
-                            extraClassesCmd.CommandText = ConfigurationManager.AppSettings("GetClassesForLearningAreasProc")
-                            extraClassesCmd.Parameters.AddWithValue("LearningAreaList", currentUserLearningArea)
-
-                        ElseIf currentUserLearningArea.ToUpper = "ALL" Then
-
-                            ' Access to all classes - e.g. for senior managers, admins, etc.
-
-                            extraClassesCmd.CommandText = ConfigurationManager.AppSettings("GetAllClassesProc")
-
-                        Else
-                            Throw New System.ArgumentException(String.Format(
-                                "Current user with ID {0} is listed as a Manager in the AMS users table " &
-                                " with invalid learning areas [{1}]. Learning areas must be a list " &
-                                " of either one or more years OR one or more 2-digit learning area codes," &
-                                " separated by commas (e.g. '6,7,8' or 'EN,MA')." &
-                                vbCrLf + vbCrLf &
-                                "Please contact Data Management for assistance.",
-                                currentUserId,
-                                currentUserLearningArea))
-                        End If
-
-                        Using extraClassesRdr As SqlDataReader = extraClassesCmd.ExecuteReader()
-
-                            If extraClassesRdr.HasRows Then
-                                Do While extraClassesRdr.Read()
-                                    ClassesMbx.Items.Add(New StudentClass(
-                                        extraClassesRdr("ClassCode").ToString,
-                                        extraClassesRdr("Description").ToString))
-                                Loop
-                            End If
-
-                        End Using 'extraClassesRdr
-                    End Using 'extraClassesCmd
-
-                End If
-
-            End Using ' synergyConnection
 
         Catch Ex As Exception
             HandleError(Ex)
@@ -301,94 +251,89 @@ Public Class Main
         ' or only students in the class selected by the user. If the user has checked the 'StudentServices'
         ' radio button, only students with Student Services documents are shown.
 
-
         ' Before re-populating the current students list, save the currently selected student. 
         Dim selectedStudent As Student = StudentsMbx.SelectedItem
 
         StudentsMbx.Items.Clear()
 
-        Try
-            Using SynergyConn As New SqlConnection(
-                    ConfigurationManager.ConnectionStrings("Synergy").ConnectionString)
-                Using StudentsCmd As New SqlCommand()
+        Dim studentsToAdd As DataTable = synergyDataHandler.allData.Tables("AllStudents").Clone
 
-                    StudentsCmd.Connection = SynergyConn
-                    StudentsCmd.CommandType = CommandType.StoredProcedure
+        If ClassesMbx.SelectedItem Is Nothing _
+                Or ClassesMbx.SelectedItem Is lineSeparator _
+                Or ClassesMbx.SelectedItem Is AllStudentsLabel Then
 
-                    If ClassesMbx.SelectedItem Is Nothing _
-                            Or ClassesMbx.SelectedItem Is lineSeparator _
-                            Or ClassesMbx.SelectedItem Is AllStudentsLabel Then
-                        StudentsCmd.CommandText = ConfigurationManager.AppSettings("GetAllStudentsProc")
-                    Else
-                        StudentsCmd.CommandText = ConfigurationManager.AppSettings("GetStudentsForClassProc")
-                        StudentsCmd.Parameters.AddWithValue("ClassCode",
-                                CType(ClassesMbx.SelectedItem, StudentClass).ClassCode)
-                    End If
+            studentsToAdd = synergyDataHandler.allData.Tables("AllStudents")
 
-                    SynergyConn.Open()
+        Else
 
-                    Using StudentsReader As SqlDataReader = StudentsCmd.ExecuteReader()
+            ' Find the IDs of students in the selected class, and add each to the dataset 
+            ' of students to add to the control. 
 
-                        If StudentsReader.HasRows Then
-                            Do While StudentsReader.Read()
+            For Each studentIdRow As DataRow In
+                    synergyDataHandler.allData.Tables("StudentClasses").Select("ClassCode = '" +
+                        CType(ClassesMbx.SelectedItem, StudentClass).ClassCode + "'")
 
-                                If StudentServicesRbtn.Checked Then
+                studentsToAdd.ImportRow(
+                        synergyDataHandler.allData.Tables("AllStudents").Select("ID = " +
+                            studentIdRow.Item("StudentId").ToString)(0))
 
-                                    If CInt(StudentsReader("StudentServicesDocumentSeq")) > 0 Then
+            Next
 
-                                        StudentsMbx.Items.Add(New Student(
-                                            StudentsReader("Preferred").ToString(),
-                                            StudentsReader("Surname").ToString(),
-                                            StudentsReader("ID").ToString(),
-                                            CInt(StudentsReader("YearLevel")),
-                                            CInt(StudentsReader("StudentServicesDocumentSeq"))))
+        End If
 
-                                    End If
+        ' If the user has checked the Student Services radio button, we only add students 
+        ' who have a Student Services report PDF attached to their record. 
 
-                                Else
+        If StudentServicesRbtn.Checked Then
 
-                                    StudentsMbx.Items.Add(New Student(
-                                        StudentsReader("Preferred").ToString(),
-                                        StudentsReader("Surname").ToString(),
-                                        StudentsReader("ID").ToString(),
-                                        CInt(StudentsReader("YearLevel")),
-                                        CInt(StudentsReader("StudentServicesDocumentSeq"))))
+            If studentsToAdd.Select("StudentServicesDocumentSeq > 0 ").Count > 0 Then
 
-                                End If
+                studentsToAdd = studentsToAdd.Select("StudentServicesDocumentSeq > 0 ").CopyToDataTable()
+                studentsToAdd.DefaultView.Sort = "Surname ASC, Preferred ASC"
+                studentsToAdd = studentsToAdd.DefaultView.ToTable
 
-                            Loop
-                        End If
+            Else
 
-                    End Using
-                End Using
-            End Using
-
-            ' If a student has been already selected by the user, that student is only retained
-            ' if they exist in the currently selected class. Otherwise, we set [currentStudent = nothing].
-            Dim currentStudentInClass As Boolean = False
-            If selectedStudent IsNot Nothing Then
-
-                ' Is there a faster way to select the current student from the list of Combobox items?
-                For Each student As Student In StudentsMbx.Items
-                    If student.id = selectedStudent.id Then
-                        StudentsMbx.SelectedItem = student
-                        currentStudentInClass = True
-                        Exit For
-                    End If
-                Next
+                studentsToAdd.Clear()
 
             End If
 
-            If Not currentStudentInClass Then
-                StudentsMbx.Text = "Search for a student"
-                StudentsMbx.SelectedItem = Nothing
-                StudentsMbx.SelectedIndex = -1
-                StudentsMbx_SelectedValueChanged(StudentsMbx, Nothing)
-            End If
+        End If
 
-        Catch Ex As Exception
-            HandleError(Ex)
-        End Try
+        For Each studentRow As DataRow In studentsToAdd.Rows
+
+            StudentsMbx.Items.Add(New Student(
+                studentRow.Item("Preferred").ToString(),
+                studentRow.Item("Surname").ToString(),
+                studentRow.Item("ID").ToString(),
+                CInt(studentRow.Item("YearLevel").ToString()),
+                CInt(studentRow.Item("StudentServicesDocumentSeq").ToString())))
+
+        Next
+
+
+        ' If a student has been already selected by the user, that student is re-selected in the control
+        ' if they exist in the currently selected class. Otherwise, we set [currentStudent = nothing].
+        Dim currentStudentInClass As Boolean = False
+        If selectedStudent IsNot Nothing Then
+
+            ' Is there a faster way to select the current student from the list of Combobox items?
+            For Each student As Student In StudentsMbx.Items
+                If student.id = selectedStudent.id Then
+                    StudentsMbx.SelectedItem = student
+                    currentStudentInClass = True
+                    Exit For
+                End If
+            Next
+
+        End If
+
+        If Not currentStudentInClass Then
+            StudentsMbx.Text = "Search for a student"
+            StudentsMbx.SelectedItem = Nothing
+            StudentsMbx.SelectedIndex = -1
+            StudentsMbx_SelectedValueChanged(StudentsMbx, Nothing)
+        End If
 
     End Sub
 
@@ -400,9 +345,9 @@ Public Class Main
         ReportViewer.Clear()
         ReportViewer.Visible = False
         StudentReportsCbx.Visible = False
-        AxAcroPDF1.src = Nothing
-        AxAcroPDF1.Visible = False
-        ExportPdfButton.Visible = False
+        PdfViewer.src = Nothing
+        PdfViewer.Visible = False
+        ExportPdfBtn.Visible = False
         NoStudentSelectedLbl.Visible = False
         StudentReportsCbx.Visible = False
 
@@ -427,7 +372,8 @@ Public Class Main
             Return
         End If
 
-        AxAcroPDF1.Visible = True
+        ViewLoadingLbl.Visible = True
+        MyBase.Update()
 
         Dim reportSequenceNumber As Integer = CType(StudentReportsCbx.SelectedItem, StudentReportDocument).DocumentSeqNumber
         Dim sFilePath As String
@@ -460,13 +406,14 @@ Public Class Main
                 sFilePath = System.IO.Path.ChangeExtension(sFilePath, ".pdf")
                 System.IO.File.WriteAllBytes(sFilePath, buffer)
 
-                AxAcroPDF1.src = sFilePath
-                AxAcroPDF1.setPageMode("none")
-                AxAcroPDF1.setShowToolbar(False)
-                AxAcroPDF1.setLayoutMode("SinglePage")
-                AxAcroPDF1.Visible = True
+                PdfViewer.src = sFilePath
+                PdfViewer.setPageMode("none")
+                PdfViewer.setShowToolbar(False)
+                PdfViewer.setLayoutMode("SinglePage")
+                PdfViewer.Visible = True
 
                 My.Computer.FileSystem.DeleteFile(sFilePath)
+
             Else
                 MsgBox(String.Format(
                         "No report was found for {0} (document seq {1})." +
@@ -478,7 +425,13 @@ Public Class Main
             End If
 
         Catch Ex As Exception
+
             HandleError(Ex)
+
+        Finally
+
+            ViewLoadingLbl.Visible = False
+
         End Try
 
     End Sub
@@ -495,7 +448,10 @@ Public Class Main
 
         NoStudentSelectedLbl.Visible = False
         ReportViewer.Visible = True
-        ExportPdfButton.Visible = True
+        ExportPdfBtn.Visible = True
+
+        ViewLoadingLbl.Visible = True
+        MyBase.Update()
 
         Try
 
@@ -507,7 +463,7 @@ Public Class Main
                     ReportViewer.ServerReport.ReportPath = ConfigurationManager.AppSettings("ssrsReportPathMiddleSeniorStudent")
             End Select
 
-            AxAcroPDF1.Visible = False
+            PdfViewer.Visible = False
             blnPortraitPDF = True
             ReportViewer.Visible = True
 
@@ -519,7 +475,13 @@ Public Class Main
             ReportViewer.Visible = True
 
         Catch Ex As Exception
+
             HandleError(Ex)
+
+        Finally
+
+            ViewLoadingLbl.Visible = False
+
         End Try
 
 
@@ -542,6 +504,10 @@ Public Class Main
         NoClassSelectedLbl.Visible = False
         ReportViewer.Visible = True
 
+
+        ViewLoadingLbl.Visible = True
+        MyBase.Update()
+
         Dim selectedClass As StudentClass = ClassesMbx.SelectedItem
 
         Try
@@ -552,7 +518,13 @@ Public Class Main
             ReportViewer.RefreshReport()
 
         Catch Ex As Exception
+
             HandleError(Ex)
+
+        Finally
+
+            ViewLoadingLbl.Visible = False
+
         End Try
 
     End Sub
@@ -573,6 +545,8 @@ Public Class Main
         NoStudentSelectedLbl.Visible = False
         NoStudentServicesReportLbl.Visible = False
         ReportViewer.Visible = True
+        ViewLoadingLbl.Visible = True
+        MyBase.Update()
 
         Try
 
@@ -604,11 +578,11 @@ Public Class Main
                                 sFilePath = System.IO.Path.ChangeExtension(sFilePath, ".pdf")
                                 System.IO.File.WriteAllBytes(sFilePath, buffer)
 
-                                AxAcroPDF1.src = sFilePath '& "#toolbar=0" '&navpanes=0"
-                                AxAcroPDF1.setPageMode("none")
-                                AxAcroPDF1.setShowToolbar(False)
-                                AxAcroPDF1.setLayoutMode("SinglePage")
-                                AxAcroPDF1.Visible = True
+                                PdfViewer.src = sFilePath '& "#toolbar=0" '&navpanes=0"
+                                PdfViewer.setPageMode("none")
+                                PdfViewer.setShowToolbar(False)
+                                PdfViewer.setLayoutMode("SinglePage")
+                                PdfViewer.Visible = True
 
                                 My.Computer.FileSystem.DeleteFile(sFilePath)
 
@@ -620,7 +594,13 @@ Public Class Main
             End Using
 
         Catch Ex As Exception
+
             HandleError(Ex)
+
+        Finally
+
+            ViewLoadingLbl.Visible = False
+
         End Try
 
     End Sub
@@ -689,9 +669,12 @@ Public Class Main
     ' ==================================================================================================
 
 
-    Private Sub AMS_Start_FormClosed(sender As Object, e As System.Windows.Forms.FormClosedEventArgs) _
+    Private Sub AMS_FormClosed(sender As Object, e As System.Windows.Forms.FormClosedEventArgs) _
             Handles Me.FormClosed
+
+        activityLogger.LogActivity(Me.Text, "Main.FormClosed", currentUserId, "Application.Exit")
         Application.Exit()
+
     End Sub
 
 
@@ -699,6 +682,12 @@ Public Class Main
             Handles ClassesMbx.SelectedValueChanged
 
         inactivityMsec = 0
+
+        If ClassesMbx.SelectedItem IsNot Nothing Then
+            activityLogger.LogActivity(Me.Text, "Main.ClassesMbx", currentUserId,
+                "Selected: " + ClassesMbx.SelectedItem.ToString)
+        End If
+
 
         Try
 
@@ -726,6 +715,11 @@ Public Class Main
 
         inactivityMsec = 0
 
+        If StudentsMbx.SelectedItem IsNot Nothing Then
+            activityLogger.LogActivity(Me.Text, "Main.StudentsMbx", currentUserId,
+                "Selected: " + StudentsMbx.SelectedItem.ToString)
+        End If
+
         If StudentDetailRbtn.Checked Then
             DisplayStudentOverview()
         ElseIf StudentReportsRbtn.Checked Then
@@ -745,6 +739,10 @@ Public Class Main
         inactivityMsec = 0
 
         If StudentDetailRbtn.Checked Then
+
+            activityLogger.LogActivity(Me.Text, "Main.StudentDetailRbn", currentUserId,
+                "Checked")
+
             StudentsMbx.Enabled = True
             PopulateStudentsMbx()
             DisplayStudentOverview()
@@ -753,12 +751,16 @@ Public Class Main
     End Sub
 
 
-    Private Sub ClassRbn_CheckedChanged(sender As System.Object, e As System.EventArgs) _
+    Private Sub ClassOverviewRbn_CheckedChanged(sender As System.Object, e As System.EventArgs) _
             Handles ClassOverviewRbtn.CheckedChanged
 
         inactivityMsec = 0
 
         If ClassOverviewRbtn.Checked Then
+
+            activityLogger.LogActivity(Me.Text, "Main.ClassOverviewRbn", currentUserId,
+                "Checked")
+
             StudentsMbx.Enabled = False
             DisplayClassOverview()
         Else
@@ -775,6 +777,9 @@ Public Class Main
         inactivityMsec = 0
 
         If StudentReportsRbtn.Checked Then
+
+            activityLogger.LogActivity(Me.Text, "Main.StudentReportsRbn", currentUserId,
+                "Checked")
 
             StudentReportsCbx.Visible = True
 
@@ -802,6 +807,9 @@ Public Class Main
 
         If StudentServicesRbtn.Checked Then
 
+            activityLogger.LogActivity(Me.Text, "Main.StudentServicesRbn", currentUserId,
+                "Checked")
+
             PopulateStudentsMbx()
 
             If StudentsMbx.SelectedItem IsNot Nothing Then
@@ -819,10 +827,15 @@ Public Class Main
     End Sub
 
 
-    Private Sub ExportPdfButton_Click(sender As System.Object, e As System.EventArgs) Handles ExportPdfButton.Click
+    Private Sub ExportPdfBtn_Click(sender As System.Object, e As System.EventArgs) Handles ExportPdfBtn.Click
+
+        inactivityMsec = 0
 
         'Export current report as a pdf
         'change to excel or word if required
+
+        activityLogger.LogActivity(Me.Text, "Main.ExportPdfBtn", currentUserId,
+                "Clicked")
 
         Try
 
@@ -871,26 +884,17 @@ Public Class Main
     Private Sub ReportViewer1_RenderingBegin(
             sender As Object, e As System.ComponentModel.CancelEventArgs) _
             Handles ReportViewer.RenderingBegin
+
         Me.Cursor = System.Windows.Forms.Cursors.WaitCursor
-        renderingTimeElapsedMsec = 0
-        RenderingTmr.Start()
+
     End Sub
 
-
-    Private Sub RenderingTmr_Tick(sender As Object, e As EventArgs) Handles RenderingTmr.Tick
-        renderingTimeElapsedMsec += RenderingTmr.Interval
-        If renderingTimeElapsedMsec >= renderingMessageTimeoutMsec Then
-            ReportViewerLoadingLbl.Visible = True
-        End If
-    End Sub
 
 
     Private Sub ReportViewer1_RenderingComplete(
-            sender As Object, e As Microsoft.Reporting.WinForms.RenderingCompleteEventArgs) _
-            Handles ReportViewer.RenderingComplete
+                sender As Object, e As Microsoft.Reporting.WinForms.RenderingCompleteEventArgs) _
+                Handles ReportViewer.RenderingComplete
         Me.Cursor = System.Windows.Forms.Cursors.Default
-        ReportViewerLoadingLbl.Visible = False
-        RenderingTmr.Stop()
     End Sub
 
 
@@ -904,11 +908,20 @@ Public Class Main
 
     Private Sub StudentReportCbx_SelectedIndexChanged(sender As Object, e As EventArgs) _
             Handles StudentReportsCbx.SelectedIndexChanged
+
+        inactivityMsec = 0
+
+        If StudentReportsCbx.SelectedItem IsNot Nothing Then
+            activityLogger.LogActivity(Me.Text, "Main.StudentReportsCbx", currentUserId,
+                "Selected: " + StudentReportsCbx.SelectedItem.ToString)
+        End If
+
         DisplayStudentReport()
     End Sub
 
 
     Private Sub Main_Resize(sender As Object, e As EventArgs) Handles Me.Resize
+        inactivityMsec = 0
         ScaleViewport()
     End Sub
 
